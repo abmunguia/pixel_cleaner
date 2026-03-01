@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Grid Colorizer v4 - Convierte cualquier imagen en un mosaico cuadriculado.
-- Acepta cualquier imagen (con o sin cuadrícula previa)
-- Enumera filas y columnas en los bordes
-- Celdas siempre cuadradas
-- Paleta de colores reducida
+Grid Colorizer v5 - Converts any image into a pixel art mosaic.
+- Accepts any image (with or without existing grid)
+- Specify exact number of rows and columns
+- Row and column numbers on margins
+- Always square cells
+- Reduced color palette
 
-Uso: python grid_colorizer.py <imagen> [--colors N] [--cell-size N]
+Usage: python grid_colorizer.py <image> --cols N --rows N [--colors N]
 """
 
 import sys
@@ -18,43 +19,43 @@ from sklearn.cluster import KMeans
 
 def get_cell_dominant_color(image_array, x1, y1, x2, y2, black_threshold=25):
     """
-    Obtiene el color dominante de una región de la imagen.
+    Gets the dominant color of a region in the image.
     """
     cell = image_array[y1:y2, x1:x2]
     
     if cell.size == 0:
         return (0, 0, 0)
     
-    # Aplanar para análisis
+    # Flatten for analysis
     pixels = cell.reshape(-1, cell.shape[-1]) if len(cell.shape) == 3 else cell.reshape(-1, 1)
     
-    # Calcular brillo
+    # Calculate brightness
     if len(pixels[0]) >= 3:
         brightness = np.mean(pixels[:, :3], axis=1)
     else:
         brightness = pixels[:, 0]
     
-    # Filtrar píxeles muy oscuros (posibles bordes de cuadrícula existente)
+    # Filter very dark pixels (possible grid borders from existing grid)
     non_black_mask = brightness > black_threshold
     non_black_pixels = pixels[non_black_mask]
     
     if len(non_black_pixels) == 0:
         return (0, 0, 0)
     
-    # Si la mayoría de la celda es negra, devolver negro
+    # If most of the cell is black, return black
     if len(non_black_pixels) < len(pixels) * 0.1:
         return (0, 0, 0)
     
-    # Calcular color promedio
+    # Calculate average color
     avg_color = np.mean(non_black_pixels[:, :3], axis=0).astype(int)
     return tuple(avg_color)
 
 
 def create_color_palette(colors, n_colors=32):
     """
-    Crea una paleta reducida de colores usando K-means clustering.
+    Creates a reduced color palette using K-means clustering.
     """
-    # Filtrar colores negros/muy oscuros
+    # Filter black/very dark colors
     non_black_colors = [c for c in colors if sum(c) > 75]
     
     if len(non_black_colors) < n_colors:
@@ -65,7 +66,7 @@ def create_color_palette(colors, n_colors=32):
     
     colors_array = np.array(non_black_colors)
     
-    # K-means para encontrar colores representativos
+    # K-means to find representative colors
     kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=10)
     kmeans.fit(colors_array)
     
@@ -77,7 +78,7 @@ def create_color_palette(colors, n_colors=32):
 
 def find_closest_color(color, palette):
     """
-    Encuentra el color más cercano en la paleta.
+    Finds the closest color in the palette using Euclidean distance.
     """
     if color == (0, 0, 0) or sum(color) < 75:
         return (0, 0, 0)
@@ -99,27 +100,30 @@ def find_closest_color(color, palette):
 
 def get_text_color(bg_color):
     """
-    Devuelve blanco o negro según el color de fondo para mejor legibilidad.
+    Returns white or black depending on background color for better readability.
     """
     brightness = (bg_color[0] * 299 + bg_color[1] * 587 + bg_color[2] * 114) / 1000
     return (255, 255, 255) if brightness < 128 else (0, 0, 0)
 
 
-def process_image(input_path, output_path=None, cell_size=20, border_width=2, 
-                  n_colors=32, margin_size=30, show_numbers=True):
+def process_image(input_path, output_path=None, n_cols=None, n_rows=None,
+                  cell_size=None, border_width=2, n_colors=32, 
+                  margin_size=30, show_numbers=True):
     """
-    Procesa cualquier imagen y genera un mosaico cuadriculado con paleta reducida.
+    Processes any image and generates a gridded mosaic with reduced palette.
     
     Args:
-        input_path: Ruta de la imagen de entrada
-        output_path: Ruta de salida (opcional)
-        cell_size: Tamaño de cada celda CUADRADA en píxeles
-        border_width: Ancho de las líneas de la cuadrícula
-        n_colors: Número de colores en la paleta
-        margin_size: Tamaño del margen para los números
-        show_numbers: Si mostrar números de fila/columna
+        input_path: Input image path
+        output_path: Output path (optional)
+        n_cols: Number of columns (if specified, calculates cell size automatically)
+        n_rows: Number of rows (if specified, calculates cell size automatically)
+        cell_size: Size of each SQUARE cell in pixels (used if cols/rows not specified)
+        border_width: Width of grid lines
+        n_colors: Number of colors in palette
+        margin_size: Margin size for numbers
+        show_numbers: Whether to show row/column numbers
     """
-    print(f"Cargando imagen: {input_path}")
+    print(f"Loading image: {input_path}")
     img = Image.open(input_path)
     
     if img.mode != 'RGB':
@@ -127,30 +131,57 @@ def process_image(input_path, output_path=None, cell_size=20, border_width=2,
     
     img_array = np.array(img)
     height, width = img_array.shape[:2]
-    print(f"Dimensiones originales: {width}x{height}")
+    print(f"Original dimensions: {width}x{height}")
     
-    # Calcular número de celdas (siempre cuadradas)
-    # El tamaño efectivo de celda incluye el borde
-    effective_cell_size = cell_size + border_width
+    # Calculate cell size based on desired columns/rows or use provided cell_size
+    if n_cols is not None and n_rows is not None:
+        # User specified exact grid dimensions
+        # Calculate cell size to fit the image, using the smaller dimension
+        # to ensure square cells
+        cell_w = width / n_cols
+        cell_h = height / n_rows
+        cell_size = int(min(cell_w, cell_h))
+        
+        # Recalculate to maintain aspect ratio with square cells
+        # Use the specified dimensions directly
+        print(f"Target grid: {n_cols} columns x {n_rows} rows")
+    elif n_cols is not None:
+        # Only columns specified, calculate rows to maintain aspect ratio
+        cell_size = width // n_cols
+        n_rows = height // cell_size
+        print(f"Columns specified: {n_cols}, calculated rows: {n_rows}")
+    elif n_rows is not None:
+        # Only rows specified, calculate columns to maintain aspect ratio
+        cell_size = height // n_rows
+        n_cols = width // cell_size
+        print(f"Rows specified: {n_rows}, calculated columns: {n_cols}")
+    else:
+        # Use cell_size to calculate grid
+        if cell_size is None:
+            cell_size = 20
+        n_cols = width // cell_size
+        n_rows = height // cell_size
     
-    n_cols = width // cell_size
-    n_rows = height // cell_size
+    # Ensure minimum cell size
+    cell_size = max(cell_size, 5)
     
-    print(f"Tamaño de celda: {cell_size}x{cell_size} px (cuadradas)")
-    print(f"Cuadrícula: {n_cols} columnas x {n_rows} filas")
+    print(f"Cell size: {cell_size}x{cell_size} px (square)")
+    print(f"Grid: {n_cols} columns x {n_rows} rows")
+    print(f"Total cells: {n_cols * n_rows}")
     
-    # Primera pasada: extraer colores de cada celda
-    print("Extrayendo colores de cada celda...")
+    # First pass: extract colors from each cell
+    print("Extracting colors from each cell...")
     cell_colors = {}
     all_colors = []
     
     for row in range(n_rows):
         for col in range(n_cols):
-            # Coordenadas en la imagen original
-            x1 = col * cell_size
-            y1 = row * cell_size
-            x2 = min(x1 + cell_size, width)
-            y2 = min(y1 + cell_size, height)
+            # Calculate coordinates in the original image
+            # Distribute evenly across the image
+            x1 = int(col * width / n_cols)
+            y1 = int(row * height / n_rows)
+            x2 = int((col + 1) * width / n_cols)
+            y2 = int((row + 1) * height / n_rows)
             
             dominant_color = get_cell_dominant_color(img_array, x1, y1, x2, y2)
             cell_colors[(row, col)] = dominant_color
@@ -158,26 +189,26 @@ def process_image(input_path, output_path=None, cell_size=20, border_width=2,
             if sum(dominant_color) > 75:
                 all_colors.append(dominant_color)
     
-    print(f"Colores únicos extraídos: {len(set(all_colors))}")
+    print(f"Unique colors extracted: {len(set(all_colors))}")
     
-    # Crear paleta reducida
-    print(f"Creando paleta de {n_colors} colores...")
+    # Create reduced palette
+    print(f"Creating palette with {n_colors} colors...")
     palette = create_color_palette(all_colors, n_colors)
-    print(f"Paleta creada con {len(palette)} colores")
+    print(f"Palette created with {len(palette)} colors")
     
-    # Mapear colores a la paleta
+    # Map colors to palette
     color_mapping = {}
     for original_color in set(cell_colors.values()):
         color_mapping[original_color] = find_closest_color(original_color, palette)
     
-    # Calcular dimensiones de la imagen de salida
-    # Cada celda tiene: cell_size + border_width (para el borde derecho/inferior)
+    # Calculate output image dimensions
+    # Each cell has: cell_size + border_width (for right/bottom border)
     grid_width = n_cols * cell_size + (n_cols + 1) * border_width
     grid_height = n_rows * cell_size + (n_rows + 1) * border_width
     
     if show_numbers:
-        total_width = grid_width + margin_size  # Margen izquierdo para números de fila
-        total_height = grid_height + margin_size  # Margen superior para números de columna
+        total_width = grid_width + margin_size
+        total_height = grid_height + margin_size
         offset_x = margin_size
         offset_y = margin_size
     else:
@@ -186,15 +217,16 @@ def process_image(input_path, output_path=None, cell_size=20, border_width=2,
         offset_x = 0
         offset_y = 0
     
-    print(f"Dimensiones de salida: {total_width}x{total_height}")
+    print(f"Output dimensions: {total_width}x{total_height}")
     
-    # Crear imagen de salida con fondo negro
+    # Create output image with black background
     output_img = Image.new('RGB', (total_width, total_height), (0, 0, 0))
     draw = ImageDraw.Draw(output_img)
     
-    # Intentar cargar una fuente, usar default si falla
+    # Try to load a font, use default if it fails
     try:
         font_size = min(margin_size - 4, cell_size - 2, 14)
+        font_size = max(font_size, 8)
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
     except:
         try:
@@ -202,36 +234,35 @@ def process_image(input_path, output_path=None, cell_size=20, border_width=2,
         except:
             font = ImageFont.load_default()
     
-    # Dibujar las celdas
-    print("Dibujando celdas...")
+    # Draw cells
+    print("Drawing cells...")
     for row in range(n_rows):
         for col in range(n_cols):
             original_color = cell_colors[(row, col)]
             quantized_color = color_mapping[original_color]
             
-            # Coordenadas en la imagen de salida
-            # Cada celda empieza después del borde izquierdo/superior
+            # Coordinates in output image
             x1 = offset_x + border_width + col * (cell_size + border_width)
             y1 = offset_y + border_width + row * (cell_size + border_width)
             x2 = x1 + cell_size
             y2 = y1 + cell_size
             
-            # Dibujar celda
+            # Draw cell
             draw.rectangle([x1, y1, x2 - 1, y2 - 1], fill=quantized_color)
     
-    # Dibujar números de columna (arriba)
-    # Mostrar solo cada N columnas si hay muchas
+    # Draw column numbers (top)
     if show_numbers:
-        print("Dibujando números de columna...")
-        # Calcular cada cuántas columnas mostrar número
+        print("Drawing column numbers...")
+        # Calculate step for showing numbers (show all if grid is small)
         col_step = 1
-        if n_cols > 50:
+        if n_cols > 30:
             col_step = 5
-        elif n_cols > 100:
+        if n_cols > 60:
             col_step = 10
         
         for col in range(n_cols):
-            if col_step > 1 and (col + 1) % col_step != 0 and col != 0:
+            # Always show first, last, and every col_step
+            if col_step > 1 and col != 0 and col != n_cols - 1 and (col + 1) % col_step != 0:
                 continue
                 
             x = offset_x + border_width + col * (cell_size + border_width) + cell_size // 2
@@ -245,18 +276,18 @@ def process_image(input_path, output_path=None, cell_size=20, border_width=2,
             draw.text((x - text_width // 2, y - text_height // 2), text, 
                      fill=(200, 200, 200), font=font)
     
-    # Dibujar números de fila (izquierda)
-    # Mostrar solo cada N filas si hay muchas
+    # Draw row numbers (left)
     if show_numbers:
-        print("Dibujando números de fila...")
+        print("Drawing row numbers...")
         row_step = 1
-        if n_rows > 50:
+        if n_rows > 30:
             row_step = 5
-        elif n_rows > 100:
+        if n_rows > 60:
             row_step = 10
             
         for row in range(n_rows):
-            if row_step > 1 and (row + 1) % row_step != 0 and row != 0:
+            # Always show first, last, and every row_step
+            if row_step > 1 and row != 0 and row != n_rows - 1 and (row + 1) % row_step != 0:
                 continue
                 
             x = margin_size // 2
@@ -270,41 +301,45 @@ def process_image(input_path, output_path=None, cell_size=20, border_width=2,
             draw.text((x - text_width // 2, y - text_height // 2), text, 
                      fill=(200, 200, 200), font=font)
     
-    # Guardar imagen
+    # Save image
     if output_path is None:
         if '.' in input_path:
             base, ext = input_path.rsplit('.', 1)
-            output_path = f"{base}_grid_{n_colors}colors.{ext}"
+            output_path = f"{base}_grid_{n_cols}x{n_rows}_{n_colors}colors.{ext}"
         else:
-            output_path = f"{input_path}_grid_{n_colors}colors.png"
+            output_path = f"{input_path}_grid_{n_cols}x{n_rows}_{n_colors}colors.png"
     
     output_img.save(output_path, quality=95)
-    print(f"\nImagen guardada: {output_path}")
+    print(f"\nImage saved: {output_path}")
     
-    # Estadísticas
+    # Statistics
     unique_colors_used = len(set(color_mapping.values()))
-    print(f"Colores únicos en resultado: {unique_colors_used}")
-    print(f"Celdas totales: {n_rows * n_cols}")
+    print(f"Unique colors in result: {unique_colors_used}")
+    print(f"Total cells: {n_rows * n_cols}")
     
     return output_path, palette
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Convierte cualquier imagen en un mosaico cuadriculado con paleta reducida.'
+        description='Converts any image into a pixel art mosaic with reduced color palette.'
     )
-    parser.add_argument('input', help='Ruta de la imagen de entrada')
-    parser.add_argument('output', nargs='?', help='Ruta de la imagen de salida (opcional)')
+    parser.add_argument('input', help='Input image path')
+    parser.add_argument('output', nargs='?', help='Output image path (optional)')
+    parser.add_argument('--cols', type=int, 
+                       help='Number of columns in the grid')
+    parser.add_argument('--rows', type=int, 
+                       help='Number of rows in the grid')
     parser.add_argument('--colors', type=int, default=32, 
-                       help='Número de colores en la paleta (default: 32)')
+                       help='Number of colors in palette (default: 32)')
     parser.add_argument('--cell-size', type=int, default=20, 
-                       help='Tamaño de cada celda cuadrada en píxeles (default: 20)')
+                       help='Cell size in pixels, used if cols/rows not specified (default: 20)')
     parser.add_argument('--border', type=int, default=2, 
-                       help='Ancho del borde entre celdas (default: 2)')
+                       help='Border width between cells (default: 2)')
     parser.add_argument('--margin', type=int, default=30, 
-                       help='Tamaño del margen para números (default: 30)')
+                       help='Margin size for numbers (default: 30)')
     parser.add_argument('--no-numbers', action='store_true', 
-                       help='No mostrar números de fila/columna')
+                       help='Hide row/column numbers')
     
     args = parser.parse_args()
     
@@ -312,13 +347,15 @@ def main():
         output_path, palette = process_image(
             args.input, 
             args.output, 
+            n_cols=args.cols,
+            n_rows=args.rows,
             cell_size=args.cell_size,
             border_width=args.border,
             n_colors=args.colors,
             margin_size=args.margin,
             show_numbers=not args.no_numbers
         )
-        print(f"\n¡Proceso completado exitosamente!")
+        print(f"\nProcess completed successfully!")
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         import traceback
